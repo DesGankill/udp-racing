@@ -488,10 +488,11 @@ float
 * авторизация клиента;
 * идентификатор игровой сессии;
 * CRC32;
-* защита от повторных пакетов;
 * проверка допустимости координат;
 * ограничение частоты команд;
 * шифрование сетевого трафика.
+
+Для команды SHOOT уже работают подтверждение ACK, повторная передача и окно дедупликации. Это не гарантия exactly-once после перезапуска сервера или за пределами окна. MOVEMENT по-прежнему доставляется без повтора.
 
 ---
 
@@ -502,21 +503,22 @@ udp-racing/
 
 ├── src/
 │   ├── client.cpp
+│   ├── server.cpp
 │   ├── packet_handler.h
 │   ├── protocol.h
-│   └── server.cpp
+│   ├── reliable_client.cpp
+│   └── reliability/
+│       ├── reliable_channel.cpp
+│       ├── adaptive_timeout.cpp
+│       └── dedup_window.cpp
 │
 └── docs/
     ├── Architecture_Design.md
-    └── Protocol_Specification.md
+    ├── Protocol_Specification.md
+    └── Reliability_Protocol.md
 ```
 
-После сборки в корневом каталоге создаются:
-
-```text
-client.exe
-server.exe
-```
+Сборка выполняется скриптом `build_all.bat` в каталог `build/`. Исполняемые файлы в репозиторий не включаются.
 
 Исполняемые файлы являются результатом локальной сборки и не включаются в репозиторий.
 

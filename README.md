@@ -20,10 +20,12 @@ Dedicated Server
 
 ### Основные компоненты
 
-* `src/client.cpp` — UDP-клиент;
+* `src/client.cpp` — UDP-клиент, измерения PING/PONG и серии надёжной доставки;
 * `src/server.cpp` — UDP-сервер;
-* `src/packet_handler.h` — обработка полученных пакетов;
-* `src/protocol.h` — описание протокола и сериализация данных.
+* `src/packet_handler.h` — разбор пакетов и ответы сервера;
+* `src/protocol.h` — формат протокола и сериализация;
+* `src/reliability/` — канал повторов, адаптивный RTO и окно дедупликации;
+* `src/telemetry.*` — телеметрия практической работы №2.
 
 ## Поддерживаемые команды
 
@@ -44,13 +46,13 @@ Dedicated Server
 * `y`
 * `z`
 
-Размер полного UDP-пакета — **19 байт**.
+`requiresAck = 0`. Размер полного UDP-пакета — **20 байт**.
 
 ### SHOOT
 
 Передаёт идентификатор оружия `weaponId`.
 
-Размер полного UDP-пакета — **8 байт**.
+`requiresAck = 1`. Потерянный SHOOT повторяется. Размер полного UDP-пакета — **9 байт**.
 
 ### STATE
 
@@ -61,13 +63,13 @@ Dedicated Server
 * `y`;
 * `z`.
 
-Размер полного UDP-пакета — **21 байт**.
+Размер полного UDP-пакета — **22 байта**.
 
 ### ACK
 
-Подтверждает получение команды.
+Подтверждает SHOOT. В нагрузке лежит `acknowledgedSequence` (`uint16_t`). ACK сам подтверждения не требует.
 
-Размер полного UDP-пакета — **7 байт**.
+Размер полного UDP-пакета — **10 байт**.
 
 ## Сериализация
 
@@ -95,30 +97,22 @@ ntohl()
 
 ## Сборка
 
-Перейдите в корневую папку проекта:
+Нужен GCC из MSYS2 UCRT64. Каталог `C:\msys64\ucrt64\bin` должен быть в `PATH`: там лежат не только `g++`, но и библиотеки времени выполнения.
 
-```bash
-cd udp-racing
+Из корня репозитория:
+
+```bat
+build_all.bat
 ```
 
-Соберите сервер:
-
-```bash
-g++ -std=c++17 -Wall -Wextra src/server.cpp -o server.exe -lws2_32
-```
-
-Соберите клиент:
-
-```bash
-g++ -std=c++17 -Wall -Wextra src/client.cpp -o client.exe -lws2_32
-```
+Скрипт собирает клиент, сервер и тесты в каталог `build/` с флагами `-std=c++17 -Wall -Wextra`.
 
 ## Запуск
 
-Сначала запустите сервер:
+Сначала сервер:
 
-```bash
-./server.exe
+```bat
+build\server.exe
 ```
 
 После запуска должно появиться:
@@ -128,15 +122,61 @@ UDP server started on port 54000
 Waiting for packets...
 ```
 
-Затем в другом терминале запустите клиент:
+Демонстрация практической работы №1, в которой SHOOT уже идёт через надёжный канал:
 
-```bash
-./client.exe
+```bat
+build\client.exe demo
 ```
 
-Клиент автоматически отправляет 10 пакетов с интервалом в одну секунду.
+Клиент отправляет 10 пакетов с интервалом в одну секунду.
 
-Команды чередуются:
+Измерения практической работы №2:
+
+```bat
+build\server.exe baseline
+build\client.exe baseline
+```
+
+Допустимые профили №2: `baseline`, `delay_50`, `delay_100`, `jitter`, `loss_5`, `combined`. Скрипт `run_experiments.bat` запускает все шесть. Потери этого режима действуют на PING, а не на SHOOT.
+
+## Тесты
+
+```bat
+set PATH=C:\msys64\ucrt64\bin;%PATH%
+build\test_protocol.exe
+build\test_telemetry.exe
+build\test_reliable_channel.exe
+build\test_adaptive_timeout.exe
+build\test_dedup.exe
+build\test_udp_reliability.exe
+```
+
+Тесты канала и RTO используют управляемое время и не ждут реальных секунд. `test_udp_reliability.exe` гоняет настоящие UDP-сокеты на порту 54021: доставка без потерь, повтор при потере SHOOT, повтор при потере ACK без второго выстрела и отказ после пяти попыток.
+
+## Эксперимент надёжной доставки
+
+Сервер и клиент одной серии должны получить один и тот же профиль. Префикс `reliable` включает потери и задержку для SHOOT и ACK.
+
+```bat
+build\server.exe reliable loss_5
+build\client.exe reliable loss_5
+```
+
+Все шесть серий и запись `docs/reliability_samples.csv`:
+
+```bat
+run_reliability_experiments.bat
+```
+
+Графики из этого CSV:
+
+```bat
+python make_reliability_graphs.py
+```
+
+Отчёт: `docs/Reliability_Protocol.md`.
+
+В режиме `demo` команды чередуются:
 
 ```text
 MOVEMENT
@@ -152,18 +192,16 @@ SHOOT
 
 ```text
 Sending MOVEMENT, sequence=1
-Sent 19 bytes
-Received response: type=3, sequence=1, payloadSize=14
+Sent 20 bytes
 State: playerId=1, x=11, y=20, z=0
 ```
 
 Пример ответа на SHOOT:
 
 ```text
-Sending SHOOT, sequence=2
-Sent 8 bytes
-Received response: type=4, sequence=2, payloadSize=0
-ACK received
+Sending SHOOT, sequence=2, requiresAck=1
+Sent 9 bytes
+ACK received, acknowledgedSequence=2, attempts=1
 ```
 
 ## Структура проекта
@@ -171,32 +209,32 @@ ACK received
 ```text
 udp-racing/
 ├── README.md
+├── build_all.bat
+├── run_reliability_experiments.bat
+├── make_reliability_graphs.py
 ├── docs/
-│   ├── Architecture_Design.md
-│   └── Protocol_Specification.md
-│
+│   ├── Protocol_Specification.md
+│   ├── Reliability_Protocol.md
+│   ├── reliability_samples.csv
+│   └── graphs/
 └── src/
     ├── client.cpp
-    ├── packet_handler.h
+    ├── server.cpp
     ├── protocol.h
-    └── server.cpp
+    └── reliability/
 ```
 
 ## Ограничения текущей версии
 
-Текущая версия является учебным прототипом.
+SHOOT подтверждается и при необходимости повторяется. MOVEMENT остаётся без повтора. Окно дедупликации не переживает перезапуск сервера и не даёт гарантию exactly-once вне своей ёмкости.
 
-Не реализованы:
+По-прежнему нет:
 
-* авторизация;
-* шифрование;
+* авторизации;
+* шифрования;
 * CRC32;
-* повторная передача потерянных пакетов;
-* защита от повторных пакетов;
-* несколько игровых сессий;
-* полноценная синхронизация нескольких игроков.
-
-Эти функции могут быть добавлены в следующих версиях.
+* нескольких игровых сессий;
+* полноценной синхронизации нескольких игроков.
 
 ## Результат
 
