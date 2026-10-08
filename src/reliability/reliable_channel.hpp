@@ -73,6 +73,7 @@ public:
 
     std::size_t PendingCount() const;
     std::size_t FailedCount() const;
+    std::uint32_t MaxAttempts() const;
     bool IsPending(std::uint16_t sequence) const;
 
     // Karn's algorithm: an ACK for a retransmitted packet is ambiguous

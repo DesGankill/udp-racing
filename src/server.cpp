@@ -2,54 +2,48 @@
 #include <string>
 
 #include <winsock2.h>
-#include "protocol.h"
+
+#include "experiment_profiles.hpp"
 #include "packet_handler.h"
-
-NetworkConditions GetNetworkConditions(
-    const std::string& experimentId)
-{
-    NetworkConditions conditions{};
-
-    if (experimentId == "delay_50")
-    {
-        conditions.delayMs = 50;
-    }
-    else if (experimentId == "delay_100")
-    {
-        conditions.delayMs = 100;
-    }
-    else if (experimentId == "jitter")
-    {
-        conditions.delayMs = 50;
-        conditions.jitterMs = 20;
-    }
-    else if (experimentId == "loss_5")
-    {
-        conditions.lossPercent = 5;
-    }
-    else if (experimentId == "combined")
-    {
-        conditions.delayMs = 50;
-        conditions.jitterMs = 20;
-        conditions.lossPercent = 5;
-    }
-
-    return conditions;
-}
 
 int main(int argc, char* argv[])
 {
+    bool reliableMode = false;
     std::string experimentId = "baseline";
 
-if (argc >= 2)
-{
-    experimentId = argv[1];
-}
+    if (argc >= 2 && std::string(argv[1]) == "reliable")
+    {
+        reliableMode = true;
+        if (argc >= 3)
+        {
+            experimentId = argv[2];
+        }
+    }
+    else if (argc >= 2)
+    {
+        experimentId = argv[1];
+    }
 
-std::cout
-    << "Experiment profile: "
-    << experimentId
-    << '\n';
+    const ExperimentProfile profile = reliableMode
+        ? ReliableProfile(experimentId)
+        : PingProfile(experimentId);
+
+    std::cout
+        << "Experiment profile: "
+        << profile.id
+        << '\n';
+    std::cout
+        << "Reliable impairment: "
+        << (profile.impairReliable ? "on" : "off")
+        << ", delayMs="
+        << profile.delayMs
+        << ", jitterMs="
+        << profile.jitterMs
+        << ", lossPercent="
+        << profile.lossPercent
+        << ", seed="
+        << profile.seed
+        << '\n';
 
     WSADATA wsaData{};
 
@@ -74,9 +68,9 @@ std::cout
     serverAddress.sin_port = htons(54000);
 
     if (bind(
-        serverSocket,
-        reinterpret_cast<sockaddr*>(&serverAddress),
-        sizeof(serverAddress)) == SOCKET_ERROR)
+            serverSocket,
+            reinterpret_cast<sockaddr*>(&serverAddress),
+            sizeof(serverAddress)) == SOCKET_ERROR)
     {
         std::cerr << "Bind failed\n";
         closesocket(serverSocket);
@@ -86,9 +80,9 @@ std::cout
 
     std::cout << "UDP server started on port 54000\n";
     std::cout << "Waiting for packets...\n";
-    const NetworkConditions conditions =
-        GetNetworkConditions(experimentId);
 
+    NetworkImpairment impairment(ConditionsFromProfile(profile));
+    ServerSession session;
 
     while (true)
     {
@@ -97,7 +91,7 @@ std::cout
         sockaddr_in clientAddress{};
         int clientAddressSize = sizeof(clientAddress);
 
-        int receivedBytes = recvfrom(
+        const int receivedBytes = recvfrom(
             serverSocket,
             buffer,
             sizeof(buffer),
@@ -117,11 +111,11 @@ std::cout
             receivedBytes,
             clientAddress,
             clientAddressSize,
-            conditions);
+            impairment,
+            session);
     }
 
     closesocket(serverSocket);
     WSACleanup();
-
     return 0;
 }

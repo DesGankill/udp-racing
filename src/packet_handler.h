@@ -4,96 +4,10 @@
 #include <vector>
 #include <winsock2.h>
 #include <chrono>
-#include <thread>
-#include <random>
 
+#include "network_impairment.hpp"
 #include "protocol.h"
-
-struct NetworkConditions
-{
-    int delayMs = 0;
-    int jitterMs = 0;
-    int lossPercent = 0;
-};
-
-inline bool ConsumeIncomingDatagram(
-    const NetworkConditions& conditions,
-    std::uint16_t sequence,
-    const char* label)
-{
-    if (conditions.lossPercent <= 0)
-    {
-        return true;
-    }
-
-    static std::mt19937 rng(12345);
-    std::uniform_int_distribution<int> lossDistribution(1, 100);
-
-    if (lossDistribution(rng) <= conditions.lossPercent)
-    {
-        std::cout
-            << label
-            << " dropped: sequence="
-            << sequence
-            << '\n';
-        return false;
-    }
-
-    return true;
-}
-
-inline int ResolveDelayMs(const NetworkConditions& conditions)
-{
-    int totalDelayMs = conditions.delayMs;
-
-    if (conditions.jitterMs > 0)
-    {
-        static std::mt19937 rng(12345);
-        std::uniform_int_distribution<int> jitterDistribution(
-            -conditions.jitterMs,
-            conditions.jitterMs);
-
-        totalDelayMs += jitterDistribution(rng);
-        if (totalDelayMs < 0)
-        {
-            totalDelayMs = 0;
-        }
-    }
-
-    return totalDelayMs;
-}
-
-inline void ApplyPathDelay(const NetworkConditions& conditions)
-{
-    const int totalDelayMs = ResolveDelayMs(conditions);
-
-    std::cout
-        << "Applying network delay: "
-        << totalDelayMs
-        << " ms\n";
-
-    if (totalDelayMs <= 0)
-    {
-        return;
-    }
-
-    const auto delayStart = std::chrono::steady_clock::now();
-    std::this_thread::sleep_for(
-        std::chrono::milliseconds(totalDelayMs));
-    const auto delayEnd = std::chrono::steady_clock::now();
-
-    const auto actualDelayUs =
-        std::chrono::duration_cast<std::chrono::microseconds>(
-            delayEnd - delayStart)
-            .count();
-
-    std::cout
-        << "Requested delay: "
-        << totalDelayMs
-        << " ms, actual delay: "
-        << actualDelayUs / 1000.0
-        << " ms\n";
-}
+#include "server_session.hpp"
 
 inline bool SendDatagram(
     SOCKET serverSocket,
@@ -130,7 +44,8 @@ inline void handlePacket(
     int receivedBytes,
     const sockaddr_in& clientAddress,
     int clientAddressSize,
-    const NetworkConditions& conditions)
+    NetworkImpairment& impairment,
+    ServerSession& session)
 {
     if (buffer == nullptr || receivedBytes <= 0)
     {
@@ -239,18 +154,55 @@ inline void handlePacket(
             return;
         }
 
-        std::cout
-            << "Shoot: "
-            << "weaponId="
-            << static_cast<int>(shoot->weaponId)
-            << '\n';
-
-        if (shoot->requiresAck != kAckRequired)
+        if (impairment.Conditions().impairReliable &&
+            impairment.DropIncoming(shoot->sequence, "SHOOT"))
         {
             return;
         }
 
-        const auto ack = SerializeAck(shoot->sequence);
+        const ShootDecision decision = session.OnShoot(
+            shoot->sequence,
+            shoot->weaponId,
+            shoot->requiresAck == kAckRequired);
+
+        if (decision.duplicate)
+        {
+            std::cout
+                << "Duplicate SHOOT ignored, sequence="
+                << shoot->sequence
+                << ", weaponId="
+                << static_cast<int>(shoot->weaponId)
+                << '\n';
+        }
+        else
+        {
+            std::cout
+                << "Shoot applied: weaponId="
+                << static_cast<int>(shoot->weaponId)
+                << ", shotsApplied="
+                << session.ShotsApplied()
+                << '\n';
+        }
+
+        if (!decision.sendAck)
+        {
+            return;
+        }
+
+        if (impairment.Conditions().impairReliable &&
+            impairment.DropOutgoing(
+                decision.acknowledgedSequence,
+                "ACK"))
+        {
+            return;
+        }
+
+        if (impairment.Conditions().impairReliable)
+        {
+            impairment.ApplyDelay();
+        }
+
+        const auto ack = SerializeAck(decision.acknowledgedSequence);
         SendDatagram(
             serverSocket,
             ack,
@@ -270,10 +222,7 @@ inline void handlePacket(
             return;
         }
 
-        if (!ConsumeIncomingDatagram(
-                conditions,
-                ping->sequence,
-                "PING"))
+        if (impairment.DropIncoming(ping->sequence, "PING"))
         {
             return;
         }
@@ -292,7 +241,7 @@ inline void handlePacket(
             << ping->clientSendTimeUs
             << '\n';
 
-        ApplyPathDelay(conditions);
+        impairment.ApplyDelay();
 
         const auto serverSendTime = std::chrono::steady_clock::now();
         const auto serverSendTimeUs =

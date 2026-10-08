@@ -114,6 +114,11 @@ std::size_t ReliableChannel::FailedCount() const
     return failed_.size();
 }
 
+std::uint32_t ReliableChannel::MaxAttempts() const
+{
+    return maxAttempts_;
+}
+
 bool ReliableChannel::IsPending(std::uint16_t sequence) const
 {
     return pending_.find(sequence) != pending_.end();
