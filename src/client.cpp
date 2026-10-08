@@ -1,7 +1,7 @@
 #include <iostream>
-#include <cstring>
 #include <thread>
 #include <chrono>
+#include <vector>
 #include <winsock2.h>
 
 #include "protocol.h"
@@ -524,80 +524,16 @@ RunExperiment(
         bool sendMovement =
             (sequence % 2 == 1);
 
-        PacketHeader header{};
-
-        header.type =
-            static_cast<uint8_t>(
-                sendMovement
-                    ? PacketType::Movement
-                    : PacketType::Shoot);
-
-        header.sequence =
-            htons(sequence);
+        std::vector<std::uint8_t> packet;
 
         if (sendMovement)
         {
-            header.payloadSize =
-                htons(sizeof(MovementPayload));
-        }
-        else
-        {
-            header.payloadSize =
-                htons(sizeof(ShootPayload));
-        }
-
-        header.version =
-            htons(kProtocolVersion);
-
-        char buffer[1024];
-        int packetSize = 0;
-
-        if (sendMovement)
-        {
-            MovementPayload movement{};
-
-            movement.x =
-                10.0f + sequence;
-
-            movement.y = 20.0f;
-            movement.z = 0.0f;
-
-            std::memcpy(
-                buffer,
-                &header,
-                sizeof(PacketHeader));
-
-            uint32_t xNetwork =
-                floatToNetwork(movement.x);
-
-            uint32_t yNetwork =
-                floatToNetwork(movement.y);
-
-            uint32_t zNetwork =
-                floatToNetwork(movement.z);
-
-            std::memcpy(
-                buffer + sizeof(PacketHeader),
-                &xNetwork,
-                sizeof(uint32_t));
-
-            std::memcpy(
-                buffer +
-                    sizeof(PacketHeader) +
-                    sizeof(uint32_t),
-                &yNetwork,
-                sizeof(uint32_t));
-
-            std::memcpy(
-                buffer +
-                    sizeof(PacketHeader) +
-                    sizeof(uint32_t) * 2,
-                &zNetwork,
-                sizeof(uint32_t));
-
-            packetSize =
-                sizeof(PacketHeader) +
-                sizeof(MovementPayload);
+            packet = SerializeMovement(
+                sequence,
+                10.0f + static_cast<float>(sequence),
+                20.0f,
+                0.0f,
+                kAckNotRequired);
 
             std::cout
                 << "Sending MOVEMENT, sequence="
@@ -606,34 +542,21 @@ RunExperiment(
         }
         else
         {
-            ShootPayload shoot{};
-
-            shoot.weaponId = 1;
-
-            std::memcpy(
-                buffer,
-                &header,
-                sizeof(PacketHeader));
-
-            std::memcpy(
-                buffer + sizeof(PacketHeader),
-                &shoot,
-                sizeof(ShootPayload));
-
-            packetSize =
-                sizeof(PacketHeader) +
-                sizeof(ShootPayload);
+            packet = SerializeShoot(
+                sequence,
+                1,
+                kAckRequired);
 
             std::cout
                 << "Sending SHOOT, sequence="
                 << sequence
-                << '\n';
+                << ", requiresAck=1\n";
         }
 
         int sentBytes = sendto(
             clientSocket,
-            buffer,
-            packetSize,
+            reinterpret_cast<const char*>(packet.data()),
+            static_cast<int>(packet.size()),
             0,
             reinterpret_cast<sockaddr*>(
                 &serverAddress),
@@ -670,108 +593,77 @@ RunExperiment(
             break;
         }
 
-        if (receivedBytes >=
-            static_cast<int>(
-                sizeof(PacketHeader)))
+        const auto* responseBytes =
+            reinterpret_cast<const std::uint8_t*>(
+                responseBuffer);
+
+        const auto responseHeader = ParseHeader(
+            responseBytes,
+            static_cast<std::size_t>(receivedBytes));
+
+        if (!responseHeader)
         {
-            PacketHeader responseHeader{};
-
-            std::memcpy(
-                &responseHeader,
-                responseBuffer,
-                sizeof(PacketHeader));
-
-            uint16_t responseSequence =
-                ntohs(responseHeader.sequence);
-
-            uint16_t responsePayloadSize =
-                ntohs(responseHeader.payloadSize);
-
+            std::cerr << "Invalid response packet\n";
+        }
+        else
+        {
             std::cout
                 << "Received response: "
                 << "type="
-                << static_cast<int>(
-                    responseHeader.type)
+                << static_cast<int>(responseHeader->type)
                 << ", sequence="
-                << responseSequence
+                << responseHeader->sequence
                 << ", payloadSize="
-                << responsePayloadSize
+                << responseHeader->payloadSize
+                << ", requiresAck="
+                << static_cast<int>(
+                       responseHeader->requiresAck)
                 << '\n';
 
-            if (responseHeader.type ==
-                static_cast<uint8_t>(
-                    PacketType::State))
+            if (responseHeader->type ==
+                static_cast<uint8_t>(PacketType::State))
             {
-                if (receivedBytes >=
-                    static_cast<int>(
-                        sizeof(PacketHeader) +
-                        sizeof(StatePayload)))
+                const auto state = ParseState(
+                    responseBytes,
+                    static_cast<std::size_t>(receivedBytes));
+
+                if (!state)
                 {
-                    uint16_t playerIdNetwork{};
-                    uint32_t xNetwork{};
-                    uint32_t yNetwork{};
-                    uint32_t zNetwork{};
-
-                    std::memcpy(
-                        &playerIdNetwork,
-                        responseBuffer +
-                            sizeof(PacketHeader),
-                        sizeof(uint16_t));
-
-                    std::memcpy(
-                        &xNetwork,
-                        responseBuffer +
-                            sizeof(PacketHeader) +
-                            sizeof(uint16_t),
-                        sizeof(uint32_t));
-
-                    std::memcpy(
-                        &yNetwork,
-                        responseBuffer +
-                            sizeof(PacketHeader) +
-                            sizeof(uint16_t) +
-                            sizeof(uint32_t),
-                        sizeof(uint32_t));
-
-                    std::memcpy(
-                        &zNetwork,
-                        responseBuffer +
-                            sizeof(PacketHeader) +
-                            sizeof(uint16_t) +
-                            sizeof(uint32_t) * 2,
-                        sizeof(uint32_t));
-
-                    uint16_t playerId =
-                        ntohs(playerIdNetwork);
-
-                    float x =
-                        floatFromNetwork(xNetwork);
-
-                    float y =
-                        floatFromNetwork(yNetwork);
-
-                    float z =
-                        floatFromNetwork(zNetwork);
-
+                    std::cerr << "Invalid STATE packet\n";
+                }
+                else
+                {
                     std::cout
                         << "State: "
                         << "playerId="
-                        << playerId
+                        << state->playerId
                         << ", x="
-                        << x
+                        << state->x
                         << ", y="
-                        << y
+                        << state->y
                         << ", z="
-                        << z
+                        << state->z
                         << '\n';
                 }
             }
-            else if (responseHeader.type ==
-                     static_cast<uint8_t>(
-                         PacketType::Ack))
+            else if (responseHeader->type ==
+                     static_cast<uint8_t>(PacketType::Ack))
             {
-                std::cout
-                    << "ACK received\n";
+                const auto ack = ParseAck(
+                    responseBytes,
+                    static_cast<std::size_t>(receivedBytes));
+
+                if (!ack)
+                {
+                    std::cerr << "Invalid ACK packet\n";
+                }
+                else
+                {
+                    std::cout
+                        << "ACK received, acknowledgedSequence="
+                        << ack->acknowledgedSequence
+                        << '\n';
+                }
             }
         }
 

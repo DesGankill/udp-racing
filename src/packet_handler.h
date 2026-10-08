@@ -1,7 +1,7 @@
 #pragma once
 
 #include <iostream>
-#include <cstring>
+#include <vector>
 #include <winsock2.h>
 #include <chrono>
 #include <thread>
@@ -16,6 +16,114 @@ struct NetworkConditions
     int lossPercent = 0;
 };
 
+inline bool ConsumeIncomingDatagram(
+    const NetworkConditions& conditions,
+    std::uint16_t sequence,
+    const char* label)
+{
+    if (conditions.lossPercent <= 0)
+    {
+        return true;
+    }
+
+    static std::mt19937 rng(12345);
+    std::uniform_int_distribution<int> lossDistribution(1, 100);
+
+    if (lossDistribution(rng) <= conditions.lossPercent)
+    {
+        std::cout
+            << label
+            << " dropped: sequence="
+            << sequence
+            << '\n';
+        return false;
+    }
+
+    return true;
+}
+
+inline int ResolveDelayMs(const NetworkConditions& conditions)
+{
+    int totalDelayMs = conditions.delayMs;
+
+    if (conditions.jitterMs > 0)
+    {
+        static std::mt19937 rng(12345);
+        std::uniform_int_distribution<int> jitterDistribution(
+            -conditions.jitterMs,
+            conditions.jitterMs);
+
+        totalDelayMs += jitterDistribution(rng);
+        if (totalDelayMs < 0)
+        {
+            totalDelayMs = 0;
+        }
+    }
+
+    return totalDelayMs;
+}
+
+inline void ApplyPathDelay(const NetworkConditions& conditions)
+{
+    const int totalDelayMs = ResolveDelayMs(conditions);
+
+    std::cout
+        << "Applying network delay: "
+        << totalDelayMs
+        << " ms\n";
+
+    if (totalDelayMs <= 0)
+    {
+        return;
+    }
+
+    const auto delayStart = std::chrono::steady_clock::now();
+    std::this_thread::sleep_for(
+        std::chrono::milliseconds(totalDelayMs));
+    const auto delayEnd = std::chrono::steady_clock::now();
+
+    const auto actualDelayUs =
+        std::chrono::duration_cast<std::chrono::microseconds>(
+            delayEnd - delayStart)
+            .count();
+
+    std::cout
+        << "Requested delay: "
+        << totalDelayMs
+        << " ms, actual delay: "
+        << actualDelayUs / 1000.0
+        << " ms\n";
+}
+
+inline bool SendDatagram(
+    SOCKET serverSocket,
+    const std::vector<std::uint8_t>& packet,
+    const sockaddr_in& clientAddress,
+    int clientAddressSize,
+    const char* label)
+{
+    const int sentBytes = sendto(
+        serverSocket,
+        reinterpret_cast<const char*>(packet.data()),
+        static_cast<int>(packet.size()),
+        0,
+        reinterpret_cast<const sockaddr*>(&clientAddress),
+        clientAddressSize);
+
+    if (sentBytes == SOCKET_ERROR)
+    {
+        std::cerr << label << " sendto failed\n";
+        return false;
+    }
+
+    std::cout
+        << label
+        << " sent: "
+        << sentBytes
+        << " bytes\n";
+    return true;
+}
+
 inline void handlePacket(
     SOCKET serverSocket,
     const char* buffer,
@@ -24,27 +132,22 @@ inline void handlePacket(
     int clientAddressSize,
     const NetworkConditions& conditions)
 {
-    if (receivedBytes < static_cast<int>(sizeof(PacketHeader)))
+    if (buffer == nullptr || receivedBytes <= 0)
     {
         std::cerr << "Packet is too small\n";
         return;
     }
 
-    PacketHeader header{};
+    const auto* bytes =
+        reinterpret_cast<const std::uint8_t*>(buffer);
+    const auto size = static_cast<std::size_t>(receivedBytes);
 
-    std::memcpy(
-        &header,
-        buffer,
-        sizeof(PacketHeader));
-
-    const uint16_t sequence =
-        ntohs(header.sequence);
-
-    const uint16_t payloadSize =
-        ntohs(header.payloadSize);
-
-    const uint16_t version =
-        ntohs(header.version);
+    const auto header = ParseHeader(bytes, size);
+    if (!header)
+    {
+        std::cerr << "Invalid or truncated packet\n";
+        return;
+    }
 
     std::cout
         << "\nReceived "
@@ -53,274 +156,131 @@ inline void handlePacket(
 
     std::cout
         << "Packet type: "
-        << static_cast<int>(header.type)
+        << static_cast<int>(header->type)
         << '\n';
 
     std::cout
         << "Sequence: "
-        << sequence
+        << header->sequence
         << '\n';
 
     std::cout
         << "Payload size: "
-        << payloadSize
+        << header->payloadSize
         << '\n';
 
     std::cout
         << "Protocol version: "
-        << version
+        << header->version
         << '\n';
 
-    if (version != kProtocolVersion)
+    std::cout
+        << "Requires ACK: "
+        << static_cast<int>(header->requiresAck)
+        << '\n';
+
+    if (!IsKnownPacketType(header->type))
     {
-        std::cerr
-            << "Unsupported protocol version\n";
+        std::cerr << "Unknown packet type\n";
         return;
     }
 
-    if (header.type ==
-        static_cast<uint8_t>(PacketType::Movement))
+    if (header->type ==
+        static_cast<std::uint8_t>(PacketType::Movement))
     {
-        if (payloadSize != sizeof(MovementPayload))
+        const auto movement = ParseMovement(bytes, size);
+        if (!movement)
         {
-            std::cerr
-                << "Invalid movement payload size\n";
+            std::cerr << "Invalid movement packet\n";
             return;
         }
-
-        if (receivedBytes <
-            static_cast<int>(
-                sizeof(PacketHeader) +
-                sizeof(MovementPayload)))
-        {
-            std::cerr
-                << "Movement packet is incomplete\n";
-            return;
-        }
-
-        MovementPayload movement{};
-
-        uint32_t xNetwork{};
-        uint32_t yNetwork{};
-        uint32_t zNetwork{};
-
-        std::memcpy(
-            &xNetwork,
-            buffer + sizeof(PacketHeader),
-            sizeof(uint32_t));
-
-        std::memcpy(
-            &yNetwork,
-            buffer + sizeof(PacketHeader) +
-                sizeof(uint32_t),
-            sizeof(uint32_t));
-
-        std::memcpy(
-            &zNetwork,
-            buffer + sizeof(PacketHeader) +
-                sizeof(uint32_t) * 2,
-            sizeof(uint32_t));
-
-        movement.x = floatFromNetwork(xNetwork);
-        movement.y = floatFromNetwork(yNetwork);
-        movement.z = floatFromNetwork(zNetwork);
 
         std::cout
             << "Movement: "
-            << "x=" << movement.x
-            << ", y=" << movement.y
-            << ", z=" << movement.z
+            << "x=" << movement->x
+            << ", y=" << movement->y
+            << ", z=" << movement->z
             << '\n';
 
-        PacketHeader responseHeader{};
+        const auto response = SerializeState(
+            movement->sequence,
+            1,
+            movement->x,
+            movement->y,
+            movement->z);
 
-        responseHeader.type =
-            static_cast<uint8_t>(PacketType::State);
-
-        responseHeader.sequence =
-            htons(sequence);
-
-        responseHeader.payloadSize =
-            htons(sizeof(StatePayload));
-
-        responseHeader.version =
-            htons(kProtocolVersion);
-
-        StatePayload state{};
-
-        state.playerId = htons(1);
-
-        xNetwork = floatToNetwork(movement.x);
-        yNetwork = floatToNetwork(movement.y);
-        zNetwork = floatToNetwork(movement.z);
-
-        char responseBuffer[
-            sizeof(PacketHeader) +
-            sizeof(StatePayload)];
-
-        std::memcpy(
-            responseBuffer,
-            &responseHeader,
-            sizeof(PacketHeader));
-
-        std::memcpy(
-            responseBuffer +
-                sizeof(PacketHeader),
-            &state.playerId,
-            sizeof(uint16_t));
-
-        std::memcpy(
-            responseBuffer +
-                sizeof(PacketHeader) +
-                sizeof(uint16_t),
-            &xNetwork,
-            sizeof(uint32_t));
-
-        std::memcpy(
-            responseBuffer +
-                sizeof(PacketHeader) +
-                sizeof(uint16_t) +
-                sizeof(uint32_t),
-            &yNetwork,
-            sizeof(uint32_t));
-
-        std::memcpy(
-            responseBuffer +
-                sizeof(PacketHeader) +
-                sizeof(uint16_t) +
-                sizeof(uint32_t) * 2,
-            &zNetwork,
-            sizeof(uint32_t));
-
-        const int sentBytes = sendto(
+        SendDatagram(
             serverSocket,
-            responseBuffer,
-            sizeof(responseBuffer),
-            0,
-            reinterpret_cast<const sockaddr*>(
-                &clientAddress),
-            clientAddressSize);
+            response,
+            clientAddress,
+            clientAddressSize,
+            "State");
 
-        if (sentBytes == SOCKET_ERROR)
+        if (movement->requiresAck == kAckRequired)
         {
-            std::cerr << "sendto failed\n";
+            const auto ack = SerializeAck(movement->sequence);
+            SendDatagram(
+                serverSocket,
+                ack,
+                clientAddress,
+                clientAddressSize,
+                "ACK");
         }
-        else
-        {
-            std::cout
-                << "State sent: "
-                << sentBytes
-                << " bytes\n";
-        }
+        return;
     }
-    else if (header.type ==
-             static_cast<uint8_t>(PacketType::Shoot))
+
+    if (header->type ==
+        static_cast<std::uint8_t>(PacketType::Shoot))
     {
-        if (payloadSize != sizeof(ShootPayload))
+        const auto shoot = ParseShoot(bytes, size);
+        if (!shoot)
         {
-            std::cerr
-                << "Invalid shoot payload size\n";
+            std::cerr << "Invalid shoot packet\n";
             return;
         }
-
-        if (receivedBytes <
-            static_cast<int>(
-                sizeof(PacketHeader) +
-                sizeof(ShootPayload)))
-        {
-            std::cerr
-                << "Shoot packet is incomplete\n";
-            return;
-        }
-
-        ShootPayload shoot{};
-
-        std::memcpy(
-            &shoot,
-            buffer + sizeof(PacketHeader),
-            sizeof(ShootPayload));
 
         std::cout
             << "Shoot: "
             << "weaponId="
-            << static_cast<int>(shoot.weaponId)
+            << static_cast<int>(shoot->weaponId)
             << '\n';
 
-        PacketHeader responseHeader{};
-
-        responseHeader.type =
-            static_cast<uint8_t>(PacketType::Ack);
-
-        responseHeader.sequence =
-            htons(sequence);
-
-        responseHeader.payloadSize =
-            htons(0);
-
-        responseHeader.version =
-            htons(kProtocolVersion);
-
-        const int sentBytes = sendto(
-            serverSocket,
-            reinterpret_cast<const char*>(
-                &responseHeader),
-            sizeof(responseHeader),
-            0,
-            reinterpret_cast<const sockaddr*>(
-                &clientAddress),
-            clientAddressSize);
-
-        if (sentBytes == SOCKET_ERROR)
+        if (shoot->requiresAck != kAckRequired)
         {
-            std::cerr << "sendto failed\n";
-        }
-        else
-        {
-            std::cout
-                << "ACK sent: "
-                << sentBytes
-                << " bytes\n";
-        }
-    }
-    else if (header.type ==
-             static_cast<uint8_t>(PacketType::Ping))
-    {
-        const auto ping = ParsePing(
-            reinterpret_cast<const uint8_t*>(buffer),
-            static_cast<std::size_t>(receivedBytes));
-
-        if (!ping)
-        {
-            std::cerr
-                << "Invalid PING packet\n";
             return;
         }
 
-        if (conditions.lossPercent > 0)
+        const auto ack = SerializeAck(shoot->sequence);
+        SendDatagram(
+            serverSocket,
+            ack,
+            clientAddress,
+            clientAddressSize,
+            "ACK");
+        return;
+    }
+
+    if (header->type ==
+        static_cast<std::uint8_t>(PacketType::Ping))
+    {
+        const auto ping = ParsePing(bytes, size);
+        if (!ping)
         {
-            static std::mt19937 rng(12345);
-
-            std::uniform_int_distribution<int>
-                lossDistribution(1, 100);
-
-            if (lossDistribution(rng) <=
-                conditions.lossPercent)
-            {
-                std::cout
-                    << "PING dropped: sequence="
-                    << ping->sequence
-                    << '\n';
-
-                return;
-            }
+            std::cerr << "Invalid PING packet\n";
+            return;
         }
 
-        const auto receiveTime =
-            std::chrono::steady_clock::now();
+        if (!ConsumeIncomingDatagram(
+                conditions,
+                ping->sequence,
+                "PING"))
+        {
+            return;
+        }
 
+        const auto receiveTime = std::chrono::steady_clock::now();
         const auto serverReceiveTimeUs =
-            std::chrono::duration_cast<
-                std::chrono::microseconds>(
+            std::chrono::duration_cast<std::chrono::microseconds>(
                 receiveTime.time_since_epoch())
                 .count();
 
@@ -332,115 +292,43 @@ inline void handlePacket(
             << ping->clientSendTimeUs
             << '\n';
 
-        PongData pong{};
+        ApplyPathDelay(conditions);
 
-        pong.sequence =
-            ping->sequence;
-
-        pong.clientSendTimeUs =
-            ping->clientSendTimeUs;
-
-        pong.serverReceiveTimeUs =
-            static_cast<std::uint64_t>(
-                serverReceiveTimeUs);
-
-        int totalDelayMs =
-            conditions.delayMs;
-
-        if (conditions.jitterMs > 0)
-        {
-            static std::mt19937 rng(12345);
-
-            std::uniform_int_distribution<int>
-                jitterDistribution(
-                    -conditions.jitterMs,
-                    conditions.jitterMs);
-
-            totalDelayMs +=
-                jitterDistribution(rng);
-
-            if (totalDelayMs < 0)
-            {
-                totalDelayMs = 0;
-            }
-        }
-
-        std::cout
-            << "Applying network delay: "
-            << totalDelayMs
-            << " ms\n";
-
-        if (totalDelayMs > 0)
-        {
-            const auto delayStart =
-                std::chrono::steady_clock::now();
-
-            std::this_thread::sleep_for(
-                std::chrono::milliseconds(
-                    totalDelayMs));
-
-            const auto delayEnd =
-                std::chrono::steady_clock::now();
-
-            const auto actualDelayUs =
-                std::chrono::duration_cast<
-                    std::chrono::microseconds>(
-                    delayEnd - delayStart)
-                    .count();
-
-            std::cout
-                << "Requested delay: "
-                << totalDelayMs
-                << " ms, actual delay: "
-                << actualDelayUs / 1000.0
-                << " ms\n";
-        }
-
-        // Время фактической отправки PONG.
-        // Оно должно фиксироваться после искусственной задержки.
-        const auto serverSendTime =
-            std::chrono::steady_clock::now();
-
+        const auto serverSendTime = std::chrono::steady_clock::now();
         const auto serverSendTimeUs =
-            std::chrono::duration_cast<
-                std::chrono::microseconds>(
+            std::chrono::duration_cast<std::chrono::microseconds>(
                 serverSendTime.time_since_epoch())
                 .count();
 
+        PongData pong{};
+        pong.sequence = ping->sequence;
+        pong.clientSendTimeUs = ping->clientSendTimeUs;
+        pong.serverReceiveTimeUs =
+            static_cast<std::uint64_t>(serverReceiveTimeUs);
         pong.serverSendTimeUs =
-            static_cast<std::uint64_t>(
-                serverSendTimeUs);
+            static_cast<std::uint64_t>(serverSendTimeUs);
 
-        const auto response =
-            SerializePong(pong);
-
-        const int sentBytes = sendto(
+        const auto response = SerializePong(pong);
+        SendDatagram(
             serverSocket,
-            reinterpret_cast<const char*>(
-                response.data()),
-            static_cast<int>(
-                response.size()),
-            0,
-            reinterpret_cast<const sockaddr*>(
-                &clientAddress),
-            clientAddressSize);
-
-        if (sentBytes == SOCKET_ERROR)
-        {
-            std::cerr
-                << "sendto PONG failed\n";
-        }
-        else
-        {
-            std::cout
-                << "PONG sent: "
-                << sentBytes
-                << " bytes\n";
-        }
+            response,
+            clientAddress,
+            clientAddressSize,
+            "PONG");
+        return;
     }
-    else
+
+    if (header->type ==
+        static_cast<std::uint8_t>(PacketType::Ack) ||
+        header->type ==
+            static_cast<std::uint8_t>(PacketType::Pong) ||
+        header->type ==
+            static_cast<std::uint8_t>(PacketType::State))
     {
         std::cerr
-            << "Unknown packet type\n";
+            << "Unexpected packet type for the server\n";
+        return;
     }
+
+    std::cerr << "Unknown packet type\n";
 }
