@@ -30,12 +30,24 @@ echo === test_udp_reliability ===
 %GPP% %FLAGS% tests\test_udp_reliability.cpp src\reliable_client.cpp src\reliability\reliable_channel.cpp src\reliability\adaptive_timeout.cpp src\reliability\dedup_window.cpp -o build\test_udp_reliability.exe -lws2_32
 if errorlevel 1 exit /b 1
 
+echo === test_prediction ===
+%GPP% %FLAGS% tests\test_prediction.cpp -o build\test_prediction.exe -lws2_32
+if errorlevel 1 exit /b 1
+
 echo === server ===
 %GPP% %FLAGS% src\server.cpp src\reliability\dedup_window.cpp -o build\server.exe -lws2_32
 if errorlevel 1 exit /b 1
 
 echo === client ===
 %GPP% %FLAGS% src\client.cpp src\telemetry.cpp src\csv_logger.cpp src\reliable_client.cpp src\reliability\reliable_channel.cpp src\reliability\adaptive_timeout.cpp -o build\client.exe -lws2_32
+if errorlevel 1 exit /b 1
+
+echo === prediction_server ===
+%GPP% %FLAGS% src\prediction_server.cpp -o build\prediction_server.exe -lws2_32
+if errorlevel 1 exit /b 1
+
+echo === prediction_client ===
+%GPP% %FLAGS% src\prediction_client.cpp -o build\prediction_client.exe -lws2_32
 if errorlevel 1 exit /b 1
 
 echo BUILD_OK

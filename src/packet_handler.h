@@ -268,6 +268,17 @@ inline void handlePacket(
     }
 
     if (header->type ==
+            static_cast<std::uint8_t>(PacketType::Input) ||
+        header->type ==
+            static_cast<std::uint8_t>(PacketType::Snapshot))
+    {
+        std::cerr
+            << "Prediction packet ignored. "
+            << "Run prediction_server.exe for practical 4\n";
+        return;
+    }
+
+    if (header->type ==
         static_cast<std::uint8_t>(PacketType::Ack) ||
         header->type ==
             static_cast<std::uint8_t>(PacketType::Pong) ||

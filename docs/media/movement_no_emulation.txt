@@ -1,0 +1,13 @@
+mode=predict lag_ms=0 loss=0 one_way, rtt_about=0
+tick=1 predict=on display_x=0.000000 display_z=-5.980000 server_x=0.000000 server_z=-6.000000 pending=1 error=0.000000
+tick=2 predict=on display_x=0.000000 display_z=-5.940000 server_x=0.000000 server_z=-6.000000 pending=2 error=0.000000
+tick=3 predict=on display_x=0.000000 display_z=-5.880000 server_x=0.000000 server_z=-5.980000 pending=2 error=0.000000 other_raw_x=-7.992739 other_smooth_x=-7.992739
+tick=4 predict=on display_x=0.000000 display_z=-5.800000 server_x=0.000000 server_z=-5.940000 pending=2 error=0.000000 other_raw_x=-8.383004 other_smooth_x=-8.129332
+tick=5 predict=on display_x=0.000000 display_z=-5.700000 server_x=0.000000 server_z=-5.880000 pending=2 error=0.000000 other_raw_x=-8.779112 other_smooth_x=-8.356754
+tick=6 predict=on display_x=0.000000 display_z=-5.580000 server_x=0.000000 server_z=-5.880000 pending=3 error=0.000000 other_raw_x=-9.178435 other_smooth_x=-8.644342
+tick=7 predict=on display_x=0.000000 display_z=-5.440001 server_x=0.000000 server_z=-5.800000 pending=3 error=0.000000 other_raw_x=-9.578327 other_smooth_x=-8.971237
+tick=8 predict=on display_x=0.000000 display_z=-5.280001 server_x=0.000000 server_z=-5.700000 pending=3 error=0.000000 other_raw_x=-9.578327 other_smooth_x=-8.971237
+tick=9 predict=on display_x=0.000000 display_z=-5.100001 server_x=0.000000 server_z=-5.440001 pending=2 error=0.000000 other_raw_x=-10.369225 other_smooth_x=-9.689148
+tick=10 predict=on display_x=0.000000 display_z=-4.900001 server_x=0.000000 server_z=-5.440001 pending=3 error=0.000000 other_raw_x=-10.754986 other_smooth_x=-10.062191
+tick=11 predict=on display_x=0.000000 display_z=-4.680001 server_x=0.000000 server_z=-5.100001 pending=2 error=0.000000 other_raw_x=-11.130863 other_smooth_x=-10.436226
+tick=12 predict=on display_x=0.000000 display_z=-4.280001 server_x=0.000000 server_z=-4.900001 pending=2 error=0.000000 other_raw_x=-11.494364 other_smooth_x=-10.806574

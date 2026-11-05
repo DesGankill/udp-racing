@@ -20,7 +20,9 @@ enum class PacketType : std::uint8_t
     State = 3,
     Ack = 4,
     Ping = 5,
-    Pong = 6
+    Pong = 6,
+    Input = 7,
+    Snapshot = 8
 };
 
 #pragma pack(push, 1)
@@ -247,6 +249,8 @@ inline bool IsKnownPacketType(std::uint8_t type)
         case static_cast<std::uint8_t>(PacketType::Ack):
         case static_cast<std::uint8_t>(PacketType::Ping):
         case static_cast<std::uint8_t>(PacketType::Pong):
+        case static_cast<std::uint8_t>(PacketType::Input):
+        case static_cast<std::uint8_t>(PacketType::Snapshot):
             return true;
         default:
             return false;
@@ -680,5 +684,151 @@ inline std::optional<PongData> ParsePong(
         *clientSendTimeUs,
         *serverReceiveTimeUs,
         *serverSendTimeUs
+    };
+}
+
+// Practical 4. The payload is the player's intent, not a position.
+constexpr std::uint16_t kInputPayloadSize = 8;
+constexpr std::uint16_t kSnapshotPayloadSize = 27;
+
+struct InputData
+{
+    std::uint16_t sequence = 0;
+    std::uint32_t tick = 0;
+    std::int8_t throttle = 0;
+    std::int8_t steer = 0;
+    std::uint8_t dash = 0;
+};
+
+struct SnapshotData
+{
+    std::uint16_t sequence = 0;
+    std::uint16_t playerId = 0;
+    std::uint32_t ackTick = 0;
+    float x = 0.0f;
+    float z = 0.0f;
+    float yaw = 0.0f;
+    float speed = 0.0f;
+    float cooldown = 0.0f;
+    std::uint8_t dashApplied = 0;
+};
+
+inline std::vector<std::uint8_t> SerializeInput(
+    std::uint16_t sequence,
+    std::uint32_t tick,
+    std::int8_t throttle,
+    std::int8_t steer,
+    std::uint8_t dash)
+{
+    std::vector<std::uint8_t> packet;
+    packet.reserve(kPacketHeaderSize + kInputPayloadSize);
+    AppendHeader(
+        packet,
+        PacketType::Input,
+        sequence,
+        kInputPayloadSize,
+        kAckNotRequired);
+    WriteU32(packet, tick);
+    WriteU8(packet, static_cast<std::uint8_t>(throttle));
+    WriteU8(packet, static_cast<std::uint8_t>(steer));
+    WriteU8(packet, dash == 0 ? 0 : 1);
+    WriteU8(packet, 0);
+    return packet;
+}
+
+inline std::optional<InputData> ParseInput(
+    const std::uint8_t* data,
+    std::size_t size)
+{
+    const auto header = ParseHeader(data, size);
+    if (!header ||
+        header->type != static_cast<std::uint8_t>(PacketType::Input) ||
+        header->payloadSize != kInputPayloadSize ||
+        header->requiresAck != kAckNotRequired)
+    {
+        return std::nullopt;
+    }
+
+    const std::uint8_t* current = header->payload;
+    const std::uint8_t* end = data + size;
+    const auto tick = ReadU32(current, end);
+    const auto throttle = ReadU8(current, end);
+    const auto steer = ReadU8(current, end);
+    const auto dash = ReadU8(current, end);
+    const auto reserved = ReadU8(current, end);
+    if (!tick || !throttle || !steer || !dash || !reserved || current != end)
+    {
+        return std::nullopt;
+    }
+
+    return InputData{
+        header->sequence,
+        *tick,
+        static_cast<std::int8_t>(*throttle),
+        static_cast<std::int8_t>(*steer),
+        *dash
+    };
+}
+
+inline std::vector<std::uint8_t> SerializeSnapshot(const SnapshotData& snapshot)
+{
+    std::vector<std::uint8_t> packet;
+    packet.reserve(kPacketHeaderSize + kSnapshotPayloadSize);
+    AppendHeader(
+        packet,
+        PacketType::Snapshot,
+        snapshot.sequence,
+        kSnapshotPayloadSize,
+        kAckNotRequired);
+    WriteU16(packet, snapshot.playerId);
+    WriteU32(packet, snapshot.ackTick);
+    WriteF32(packet, snapshot.x);
+    WriteF32(packet, snapshot.z);
+    WriteF32(packet, snapshot.yaw);
+    WriteF32(packet, snapshot.speed);
+    WriteF32(packet, snapshot.cooldown);
+    WriteU8(packet, snapshot.dashApplied);
+    return packet;
+}
+
+inline std::optional<SnapshotData> ParseSnapshot(
+    const std::uint8_t* data,
+    std::size_t size)
+{
+    const auto header = ParseHeader(data, size);
+    if (!header ||
+        header->type != static_cast<std::uint8_t>(PacketType::Snapshot) ||
+        header->payloadSize != kSnapshotPayloadSize ||
+        header->requiresAck != kAckNotRequired)
+    {
+        return std::nullopt;
+    }
+
+    const std::uint8_t* current = header->payload;
+    const std::uint8_t* end = data + size;
+    const auto playerId = ReadU16(current, end);
+    const auto ackTick = ReadU32(current, end);
+    const auto x = ReadF32(current, end);
+    const auto z = ReadF32(current, end);
+    const auto yaw = ReadF32(current, end);
+    const auto speed = ReadF32(current, end);
+    const auto cooldown = ReadF32(current, end);
+    const auto dashApplied = ReadU8(current, end);
+    if (!playerId || !ackTick || !x || !z || !yaw || !speed ||
+        !cooldown || !dashApplied || current != end)
+    {
+        return std::nullopt;
+    }
+
+    return SnapshotData{
+        header->sequence,
+        *playerId,
+        *ackTick,
+        *x,
+        *z,
+        *yaw,
+        *speed,
+        *cooldown,
+        *dashApplied
     };
 }

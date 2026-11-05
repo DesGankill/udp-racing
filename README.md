@@ -139,6 +139,30 @@ build\client.exe baseline
 
 Допустимые профили №2: `baseline`, `delay_50`, `delay_100`, `jitter`, `loss_5`, `combined`. Скрипт `run_experiments.bat` запускает все шесть. Потери этого режима действуют на PING, а не на SHOOT.
 
+## Практическая работа №4
+
+Тот же протокол и тот же репозиторий. Unreal не используется: роли из задания закрыты своими типами, сервер по-прежнему авторитетный. Подробности — в `docs/Prediction_Implementation.md`.
+
+Listen-сервер здесь — процесс `prediction_server.exe`: он и считает мир, и ведёт свою машину. Второй игрок — отдельный `prediction_client.exe`. Порт `54010`, чтобы не занимать `54000` у сервера практических №1–№3.
+
+Пакет `INPUT` несёт такт, газ, руль и просьбу рывка. Координат в нём нет. Старый `MOVEMENT` с координатами оставлен для прошлых работ и этим режимом не используется.
+
+```bat
+build\prediction_server.exe
+build\prediction_client.exe
+```
+
+Клавиши клиента: `W`/`S` газ, `A`/`D` руль, `F` рывок, `C` локальный сдвиг, `P` предсказание, `X` стоп, `Q` выход. На сервере те же `W`/`A`/`S`/`D`, в `--headless` машина хоста едет сама.
+
+Проверочный прогон:
+
+```bat
+build\prediction_server.exe --headless
+build\prediction_client.exe --script --no-predict --lag-ms 100 --loss 0 --ticks 36
+build\prediction_client.exe --script --lag-ms 100 --loss 0 --ticks 24
+build\prediction_client.exe --script --cheat --lag-ms 180 --loss 4 --ticks 48
+```
+
 ## Тесты
 
 ```bat
